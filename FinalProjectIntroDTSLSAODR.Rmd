@@ -1,0 +1,424 @@
+---
+title: "Factors that affect Inestability"
+author: "LIlian Sao de Rivera"
+date: "December 10, 2018"
+runtime: shiny
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Research Question
+
+**Education and Poverty factors contribute to the inestability of a country.**
+
+**"Education is a useful weapon in the fight against political instability"**
+  -Asongu, Nuawhukwu, *The role of lifelong learning on political stability and non violence: evidence from Africa.*
+
+**Datasets**
+
+- Governance indicators World Bank: 1 indicatores
+- Education indicators World Bank: 158 indicatores
+- Poverty indicators World Bank: 26 indicators
+
+    
+## Initial Assesment
+
+- Total Indicators : 184 Indicators
+- Years: 2000 -  2017
+- Number of Countries : 199
+
+**Dependant variable:**
+
+  Political Stability and Absence of Violence/Terrorism
+  
+**Independant Variables:**
+
+- Education Indicator
+- Poverty Indicators
+
+## EDA Analysis
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+library(dplyr)
+library(readxl)
+library(stringr)
+library(tidyr)
+library(shiny)
+library(ggplot2)
+library(DT)
+library(reshape)
+library(glmnet)
+library(caret)
+library(knitr)
+```
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+
+## Datasets
+governance <- read.csv("wgi_data.csv",stringsAsFactors = FALSE)
+education <- read.csv("education_indicators.csv",stringsAsFactors = FALSE)
+poverty <- read.csv("poverty_indicators.csv", stringsAsFactors = FALSE)
+variables <- read.csv("variables.csv", stringsAsFactors = FALSE)
+colnames(variables) <- c("Variable","variable_name","source_note","source_organization")
+# Datasets with the information of wgi, education and poverty estimates
+final_data_set <- read.csv("final_result_dataset.csv", stringsAsFactors = FALSE)
+final_data_set$year <- as.factor(final_data_set$year)
+final_data_set$Region <- as.factor(final_data_set$Region)
+final_data_set$IncomeGroup<- as.factor(final_data_set$IncomeGroup)
+
+
+
+## Years / Regions / Countries
+
+Regions <- unique(poverty$Region)
+Years <- sort(unique(poverty$year), decreasing = TRUE)
+Countries <- unique(poverty$Country_Territory)
+
+names_ed <- names(education)
+names_ed <- names_ed[5:(length(names_ed)-2)]
+names_pv <- names(poverty)
+names_pv <- names_pv[5:(length(names_pv)-2)]
+#scale_education<- scale_education %>% select_if(~ !any(is.na(.)))
+
+
+```
+```{r}
+eda_ui <- fluidPage(
+  
+      tabsetPanel(
+        tabPanel("Filters",
+          sliderInput(inputId = "YearInput", label = "Year",min=2000, max=2017, value= 2016),
+          selectInput(inputId = "Region", label= "Region", choices = Regions, multiple = TRUE)
+                 
+        ),
+        
+        tabPanel("Education",
+            plotOutput("heat_edu", brush = "brush_heat_edu"),
+            DT::dataTableOutput("info_edu")
+        ),
+        tabPanel("Poverty",
+            plotOutput("heat_pov", brush = "brush_heat_pov"),
+            DT::dataTableOutput("info_pov")
+        ),
+        
+        tabPanel("Governance",
+            plotOutput("line_gov", click=  "click_gov"),
+            DT::dataTableOutput("info")
+        )
+  )  
+  
+)
+
+### Server #### 
+
+eda_server <- function (input,output) {
+  
+   governance_selected <- reactive({
+      req(input$YearInput)
+      req(input$Region)
+      filter(governance, year %in% input$YearInput, Region %in% input$Region)
+   })
+   
+   
+   poverty_selected <- reactive({
+      req(input$YearInput)
+      req(input$Region)
+      filter(poverty, year %in% input$YearInput, Region %in% input$Region)
+   })
+   
+   education_selected <- reactive({
+      req(input$YearInput)
+      req(input$Region)
+      filter(education, year %in% input$YearInput, Region %in% input$Region)
+   })
+   
+   education_plot <- reactive({
+     
+      req(input$YearInput)
+      req(input$Region)
+      
+     scale_education <- education %>% filter(year %in% input$YearInput, Region %in%   input$Region ) %>%  dplyr::select(names_ed)
+    names_education <- education %>% filter(year %in% input$YearInput, Region %in% input$Region) %>% dplyr::select(WBCode)
+    
+    rownames(scale_education) <- names_education$WBCode
+    
+    row.order <- hclust(dist(scale_education))$order # clustering
+    col.order <- hclust(dist(t(scale_education)))$order
+    new_education <- scale_education[row.order, col.order] # re-order matrix accoring to       clustering
+    df_molten_education <- melt(as.matrix(new_education))
+    colnames(df_molten_education) <- c("Country", "Variable","Estimate")
+
+    df_molten_education           
+   })
+   
+   
+   poverty_plot <- reactive({
+      req(input$YearInput)
+      req(input$Region)
+
+      scale_poverty <- poverty %>% filter(year %in% input$YearInput, Region %in% input$Region ) %>%  dplyr::select(names_pv)
+      names_poverty <- poverty %>% filter(year %in% input$YearInput, Region %in% input$Region) %>% dplyr::select(WBCode)
+      
+      rownames(scale_poverty) <- names_poverty$WBCode
+    
+      row.order <- hclust(dist(scale_poverty))$order # clustering
+      col.order <- hclust(dist(t(scale_poverty)))$order
+      new_poverty <- scale_poverty[row.order, col.order] # re-order matrix accoring to       clustering
+      df_molten_poverty <- melt(as.matrix(new_poverty))
+      colnames(df_molten_poverty) <- c("Country", "Variable","Estimate")
+
+      df_molten_poverty           
+
+   })
+   
+   governance_plot <- reactive({
+     req(input$Region)
+     filter(governance, Region %in% input$Region)
+   })
+   
+   output$table_gov <- DT::renderDataTable(
+     DT::datatable(governance_selected(),options=list(autoWith=TRUE))
+   )
+   
+   output$table_pov <- DT::renderDataTable(
+     DT::datatable(poverty_selected(),options=list(autoWith=TRUE))
+   )
+   output$table_edu <- DT::renderDataTable(
+     DT::datatable(education_selected(),options=list(autoWith=TRUE))
+   )
+   output$heat_edu <- renderPlot({
+     
+    ggplot(data = education_plot(),  aes(x = Variable, y = Country, fill = Estimate)) + geom_raster() +  scale_fill_distiller(palette = "RdYlBu", trans="log10") +
+       theme(axis.text.x = element_text(angle = 90, hjust = 1, size=4)) + 
+       ggtitle("Clustered heatmap Education")
+     
+   })
+   
+   output$heat_pov <- renderPlot({
+     
+     ggplot(data = poverty_plot(),  aes(x = Variable, y = Country, fill = Estimate)) +              geom_raster() +  scale_fill_distiller(palette = "RdYlBu", trans="log10") +
+       theme(axis.text.x = element_text(angle = 90, hjust = 1, size=4)) + 
+       ggtitle("Clustered heatmap Poverty")
+   })
+   
+   output$line_gov <- renderPlot({
+     ggplot(data = governance_plot(), aes(x=year, y=PoliticalStabilityNoViolence, color=Country_Territory))+geom_line()+geom_point()
+   })
+   
+    output$info <- DT::renderDataTable({
+      x<-nearPoints(governance_plot(), input$click_gov, threshold = 10, maxpoints = 1,
+               addDist = TRUE) %>% select(Country_Territory, WBCode, year, PoliticalStabilityNoViolence)
+      DT::datatable(x)
+    })
+
+    
+    output$info_pov <- DT::renderDataTable({
+      x<-brushedPoints(poverty_plot(), input$brush_heat_pov, allRows = FALSE)
+      x<- x %>% left_join(variables, by=c("Variable")) %>% select(Country,Variable, Estimate, variable_name)
+      DT::datatable(x)
+    })
+    
+    output$info_edu <- DT::renderDataTable({
+      x<-brushedPoints(education_plot(), input$brush_heat_edu, allRows = FALSE)
+      x<- x %>% left_join(variables, by=c("Variable")) %>% select(Country,Variable, Estimate, variable_name)
+      DT::datatable(x)
+    })
+  
+    
+}
+
+shinyApp(ui = eda_ui, server = eda_server)
+
+```
+
+## Model 
+
+- There is multicollinearity
+- There is a high number of variables, 184.
+- The year is not included
+     - There are factors associated with specific years that changes the behavior of the dependent variable dramatically; these changes could be outliers, but more information is needed to include this variable.
+- The analysis is made within a year( a year is chosen)
+- The analysis uses 75% for training and 25% for testing
+
+**For this type of information a LASSO regression is a good option**
+
+
+## Penalized Regression: LASSO
+```{r }
+model_ui<-fluidPage(
+
+      tabsetPanel(
+        tabPanel("Filters",
+          sliderInput("InputYearM", label="Year",min = 2000, max=2017, value = 2016)
+        ),
+        tabPanel("LASSO",
+          verbatimTextOutput("model_lasso_param"),
+          verbatimTextOutput("model_lasso_lambda"),
+          plotOutput("model_plot_coef",height = "300px" )
+
+        ),
+        tabPanel("Coeficients",
+          DT::dataTableOutput("model_lasso_coef")
+        ),
+          
+        tabPanel("Prediction",
+          verbatimTextOutput("model_lasso_pred1"),
+          DT::dataTableOutput("model_lasso_pred2")
+        )
+        
+  )
+)
+
+model_server <- function(input, output){
+  ## LASSO MODEL 
+  data_to_model <- reactive({
+     x<- final_data_set %>% filter(year==input$InputYearM)
+     cbind(x[,13:length(final_data_set)], select(x,PoliticalStabilityNoViolence)) %>% na.omit()
+   })
+      
+  # Divide the information in train and test datasets
+   train_ind <- reactive({
+      sample_size <-floor(0.75 * nrow(data_to_model()))
+      set.seed(123)
+      sample(seq_len(nrow(data_to_model())), size = sample_size)  
+   })
+   
+   train_dataset <- reactive({
+     data_to_model()[train_ind(), ]
+   })  
+   
+   test_dataset <- reactive({
+     data_to_model()[-train_ind(), ]
+   })
+   
+   # Predictor variables
+   
+   x_predictor <- reactive({
+     model.matrix(PoliticalStabilityNoViolence~., train_dataset() )[,-1]
+   })
+   
+   # Res
+   res_dat <- observe({
+    x_predictor()
+   })
+  
+   # Outcome variable
+   
+   y_outcome <- reactive({
+     train_dataset()$PoliticalStabilityNoViolence
+   })
+  
+   ## Lasso Model
+
+      
+  cv_lasso <- reactive({
+    set.seed(123)
+    cv.glmnet(x_predictor(), y_outcome(), alpha = 1)
+  })
+  
+  # Display the best lambda value
+  #cv_lasso()$lambda.min
+
+  output$model_lasso_lambda <-renderPrint({
+    x<- paste("Min. Lambda : " , as.character(cv_lasso()$lambda.min))
+    print(x)
+  })
+  
+  
+  # Fit the final model on the training data
+  
+  model_lasso <- reactive({
+    glmnet(x_predictor(), y_outcome(), alpha = 1, lambda = cv_lasso()$lambda.min)
+  })
+
+  
+  # Display de model 
+
+  output$model_lasso_param <- renderPrint({
+    x<-"glmnet(x_predictor(), y_outcome(), alpha = 1, lambda = cv_lasso()$lambda.min)"
+    print(x)
+  })
+    
+  # Display regression coefficients
+
+  lasso_coef<- reactive({
+    x<- as.data.frame(as.matrix(coef.glmnet(model_lasso()))) 
+    
+    x<-x %>% mutate(s0_abs=abs(s0), Variable=row.names(x)) %>% filter(Variable!="(Intercept)") %>% arrange(desc(s0_abs)) %>% select(Variable,s0)
+    row.names(x) <- c()
+    x
+  })
+
+  output$model_lasso_coef <- DT::renderDataTable ({
+    y<- lasso_coef() %>% left_join(variables, by=c("Variable")) %>% select(variable_name, s0, source_note)
+    datatable(y)
+  
+  })
+
+  output$model_plot_coef <- renderPlot({
+      ggplot(lasso_coef(), aes(x=s0))+ geom_dotplot(dotsize = 0.5)
+    
+  })
+
+
+  # Make predictions on the test data
+  
+  model_lasso.test <- reactive({
+    model.matrix(PoliticalStabilityNoViolence~., test_dataset() )[,-1]
+  })
+  
+  predictions_lasso <- reactive({
+    predict(model_lasso(), model_lasso.test()) %>% as.vector()
+  })
+
+
+  # Model performance metrics
+  
+  lasso_res<- reactive({
+    data.frame(
+     RMSE = RMSE(predictions_lasso(), test_dataset()$PoliticalStabilityNoViolence),
+     Rsquare = R2(predictions_lasso(), test_dataset()$PoliticalStabilityNoViolence)
+  
+     )
+    
+  })
+
+  output$model_lasso_pred1 <- renderPrint({
+    print("Test: model.matrix(PoliticalStabilityNoViolence~., test_dataset() )[,-1]")
+  })
+  
+  output$model_lasso_pred2 <- DT::renderDataTable({
+    x<-lasso_res()
+    datatable(x, autoHideNavigation = TRUE, options = list(pageLength=5))
+  })
+  
+  
+  
+}
+
+shinyApp(ui = model_ui, server = model_server)
+
+
+```
+
+## Summary
+
+For Lasso Regresion  in **2016**:
+
+- RMSE : 0.7652 **Low number which implies that the prediction is good**
+- R2   : 0.4571 **The model explains the variance in Stability in 46%**
+
+For other year RMSE keeps being low and R2 explains the changes in Stability above 30%
+
+## Conclusions
+
+- This model seems a good fit for the information presented.
+- More information is needed on how to include year within the model, maybe by including additional variables that explain the sudden changes
+- Further analysis of how to group the variables would be useful.
+
+
+## Thanks 
+
+### Questions?
+
